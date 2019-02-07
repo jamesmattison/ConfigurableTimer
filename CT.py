@@ -1,5 +1,5 @@
 """
-ConfigurableTimer .01
+ConfigurableTimer .02
 ----------------------
 
 Requirements:
@@ -15,16 +15,15 @@ class Timer
 
 
 """
-
+from playsound import playsound
+from AlertEmail import AlertEmail
+from XPBX import PBXAlert
 from datetime import datetime
 from time import sleep, strftime
 import sys
 import threading
-
-SEND_TO = "test@example.com" # change before use
-SMS_TO = "+18008188888" #if 1-800-818-8888
-
-
+import pdb
+import os
 ######################## superclass Timer #####################################
 
 
@@ -41,10 +40,11 @@ class Timer:
     i = 0
     FAIL = "\u001b[41m[FAIL]\u001b[47;0m"
     OK = "\u001b[32m[ OK ]\u001b[47;0m"
-    allowed_todos = ["sms", "call", "email", "wav"]
+    UNKN = "\u001b[43m[????]\u001b[47;0m"
+    allowed_todos = ["sms", "call", "email", "wav", "exec"]
     timer_threads = []
 
-    def __init__(self, alarm_type, fn="/vx/mond0lib/STILL.wav", testmode=False, verbose=True):
+    def __init__(self, alarm_type, fn=None, testmode=False, verbose=True):
         self.fn = fn
         self.alarm_type = "sms"
         if alarm_type in Timer.allowed_todos:
@@ -58,20 +58,24 @@ class Timer:
         self.tn = "xTT-" + str(Timer.i)
         self.timer_init = True
         self.at = None
-        self.init_time = datetime.now().strftime("(%d):%H:%M:%S")
+        self.gen_init_time = datetime.now().strftime("(%d):%H:%M:%S")
+        self.init_time = None
         self.msg = None
         self.tinfo = None
+        self.tuplist = []
 
 
-    def start(self, when, message, tn=None, verbose=True, *args, **kwargs):
+    def start(self, when, m=None, tn=None, verbose=True, *args, **kwargs):
         """ start() does the following.
 
         1. Concatenates the data into tinfo
         2. Initializes the timer, and starts it.
         3. Returns after starting and awaits additional ordrs."""
-        
+        self.init_time = datetime.now()
+        message = "No message specified, using default test item."
+        if m is not None:
+            message = m
         try:
-            #pdb.set_trace()
             self.when = when
             self.msg = message
             if tn is not None:
@@ -89,7 +93,10 @@ class Timer:
             sc = 0
             self.at = ct.replace(day=dy, hour=hr, minute=mn, second=sc)
             if self.at < ct:
-                raise TimerInPast 
+                if self.testmode:
+                    pass
+                else:
+                    print("timer in past")
             if self.testmode:
                 ct = self.at   #if testmode, make ct=at so alarm triggers right now
                 print("\n\tTestmode: {}.".format(self.testmode))
@@ -107,9 +114,11 @@ class Timer:
             Timer.i += 1
             x = TimerThread(self.tinfo)
             x.start()
-            Timer.timer_threads.append(x)
+            ttup = (x, self.tinfo)
+            self.timer_threads.append(ttup)
+            self.tuplist.append(ttup)
             print("\t{} |{}| Started and appended to master list.".format(Timer.OK, self.tinfo['name']))
-            return
+            return True
         except Exception as e:
             print("\n\t{} Caught exception in start: {}. ".format(Timer.FAIL, e))
             return False
@@ -117,16 +126,17 @@ class Timer:
 
     def status(self):
         """ Iterates through the timers in the class and prints information."""
-        print("\n\t[STATUS]")
-        print("\n\t# active timers: {}".format(len(Timer.timer_threads)))
-        for n in range(0, len(Timer.timer_threads)):
-            active = Timer.timer_threads[n].isAlive()
-            print("\n\tID: {}\n\tName: {}\n\tInit: {}    AlarmT: {}\n\tMode: {}\n\tTarget: {}"
-                .format(n, Timer.timer_threads[n].tinfo['name'],
-                Timer.timer_threads[n].tinfo['init_time'],
-                Timer.timer_threads[n].tinfo['alarm_time'],
-                Timer.timer_threads[n].tinfo['testmode'].
-                Timer.timer_threads[n].tinfo['todo']))
+       # pdb.set_trace()
+        print("\u001b[4m\t\tTimer Status\u001b[0m")
+        print("\n\t# active timers: {}".format(len(self.timer_threads)))
+        for n in range(0, len(self.timer_threads)):
+            active = True
+            print("\n\tID: {}\n\tName: {}\n\tInit: {}    AlarmT: {}\n\tTest?: {}\n\tTarget: {}"
+                .format(n, self.tuplist[n][1]['name'],
+                self.tuplist[n][1]['init_time'].strftime("(%m-%d-%y)%H:%M:%S"),
+                self.tuplist[n][1]['alarm_time'],
+                self.tuplist[n][1]['testmode'],
+                self.tuplist[n][1]['todo']))
         return True
 
 
@@ -154,7 +164,6 @@ class TimerThread(threading.Thread):
 
         Waits until time is up, then executs the todo action. 
         If testmode, executes immediately."""
-
         if self.verbose:
             print("\t{} |{}| Initialization begins.".format(Timer.OK, self.tinfo['name']))
         time_asleep = 1
@@ -165,17 +174,17 @@ class TimerThread(threading.Thread):
                         print("|{}| +1 minute.".format(datetime.now().strftime("%H:%M:%S")))       
                     time_asleep += 1
                     sleep(1)
-                    self.execute_alarm_target(self.tinfo)
+                    self.execute_target(self.tinfo)
                     return True
         elif self.testmode is True:
             print("\t{} **** TESTMODE.Forcing immediate exec!".format(Timer.OK))
-            self.execute_alarm_target()
+            self.execute_target()
             return True
         else:
             print("\t  testmode must be True or False!")
             return False
 
-    def execute_alarm_target(self, **kwargs):
+    def execute_target(self, **kwargs):
         """ Parses the todo option from Timer and executes."""
         if not self.initialized:
             raise NotInitialized(message="Attempting to execute alarm target, but TimerThread unnitialized!")
@@ -185,9 +194,11 @@ class TimerThread(threading.Thread):
         if self.todo == "sms":
             targ.send_sms(self.tinfo['message'])
         elif self.todo == "email":
-            targ.send_email(SEND_TO, ("{} is sending email?".format(self.tinfo['name'])), self.tinfo['message']) 
+            targ.send_email(TARG_EMAIL, SUBJ, MESSAGE]) 
         elif self.todo == "wav":
             targ.play_wav(self.tinfo['fn'])
+        elif self.todo == "exec":
+            targ.os_exec(self.tinfo['message'])
         else:
             print("\t{} : Todo: {} not in allowed_todos: {}".format(Timer.FAIL, self.todo, Timer.allowed_todos))
 
@@ -202,7 +213,7 @@ class TimerThread(threading.Thread):
                 print("\t\t1: Test Name: {}".format(self.tinfo['name']))
                 print("\t\t2: Thread ID: {}\n\t\t3: Action: {}".format(self.tinfo['tid'], self.tinfo['todo']))
                 print("\t\t4: Thread Mode: {}\n\t\t5: Verbose: {}".format(self.tinfo['todo'], self.tinfo['verbose']))
-                print("\t\t6: Init Time: {}\n\t\t7: Alarm Time: {}".format(self.tinfo['init_time'], self.tinfo['alarm_time'].strftime("%H:%M:%S")))
+                print("\t\t6: Init Time: {}\n\t\t7: Alarm Time: {}".format(self.tinfo['init_time'].strftime("(%d)%H:%M:%S"), self.tinfo['alarm_time'].strftime("%H:%M:%S")))
                 print("\n\n")
                 return True
         except Exception as e:
@@ -234,10 +245,9 @@ class TimerTarget(Timer):
         self.message = self.tinfo['message']
         self.fn = self.tinfo['fn']
 
-    def send_sms(self, message, to=SMS_TO):
+    def send_sms(self, message, to=CONTACT_NUMBER):
         """ uses twilio to send text message to ma phone"""
         try:
-            from XPBX import PBXAlert
             pbx_alarm = PBXAlert()
             pbx_alarm.send_sms(self.tinfo['message'])
             if self.verbose:
@@ -247,7 +257,27 @@ class TimerTarget(Timer):
             print("{} Caught exception in send_sms: {}".format(Timer.FAIL, e))
             return False
 
-    def callout(self, to=SMS_TO, **kwargs):
+    def os_exec(self, cmd, **kwargs):
+        """ uses os.system to execute whatever script, command, etc """
+        pdb.set_trace()
+        try:
+            retv = os.system(cmd)
+            print("Got retv: {}".format(retv))
+            if retv != 0:
+                print("\t{} |{}| Got incorrect retv {}!".format(Timer.UNKN,self.tinfo['name'], retv))
+                return
+            else:
+                print("\t{} |{}| Executed system command successfully.".format(Timer.OK, self.tinfo['name']))
+                return True
+
+        except PermissionError as e:
+            print("{} Permission error in os_exec.".format(Timer.FAIL, e))
+            return False
+        except Exception as e:
+            print("{} Caught exception in os_exec: {}".format(Timer.FAIL, e))
+            return False
+
+    def callout(self, to=CONTACT_NUMBER, **kwargs):
         """NOT IMPLEMENTED!!!"""
         print("Callout not implemented yet!")
         pass
@@ -257,9 +287,8 @@ class TimerTarget(Timer):
 
         requires: to, subject, message!"""
 
-        email_to = SEND_TO
+        email_to = "james@vixal.net"
         try:
-            from AlertEmail import AlertEmail
             mx_alarm = AlertEmail(email_to, self.subject, self.message)
             mx_alarm.send()
             print("\t{} |{}| Successfully sent email.".format(Timer.OK, self.tinfo['name']))
@@ -272,7 +301,6 @@ class TimerTarget(Timer):
         if fn is not None:
             file = fn
         try:
-            from playsound import playsound
             playsound(file)
             print("{} |{}| Soundfile played successfully.".format(Timer.OK, self.tinfo['name']))
             return True
@@ -286,20 +314,30 @@ class OneShot:
 
 ################################### Errors ######################################
 
-class TimerInPast(ValueError):
+class TimerError(Exception):
+    pass
+
+
+class TimerInPast(TimerError):
+    """ Attemptng to start timer in past!"""
     def __init__(self, message=None):
         if message:
             print(message)
         else:
             print("You are attempting to start a timer in the past!")
 
-class MissingRequiredArguments(ValueError):
+
+class MissingRequiredArguments(TimerError):
+    """Used when WAV is selected with no filename"""
     def __init__(self, message=None):
         if message:
             print(message)
         else:
             print("Missing the required command line arguments for a oenshot.")
-class NotInitialized(ValueError):
+
+
+class NotInitialized(TimerError):
+    """Used when a method is called prior to object initialization!"""
     def __init__(self, message=None):
         if message:
             print(message)
